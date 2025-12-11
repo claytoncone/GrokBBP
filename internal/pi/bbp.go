@@ -6,89 +6,70 @@ import (
 	"sync"
 )
 
-func ComputeHexDigits(digits int) []int {
-	terms := digits*5 + 100 // safe number of terms
+var sixteen = big.NewInt(16)
 
-	numWorkers := runtime.NumCPU()
-	ch := make(chan *big.Rat, numWorkers)
+// ComputeHexDigits returns the first n hexadecimal digits of π after 3.
+func ComputeHexDigits(n int) []byte {
+	terms := n + 20 // more than enough
+
+	type partial struct{ s *big.Rat }
+	ch := make(chan partial, runtime.NumCPU())
 	var wg sync.WaitGroup
 
-	for i := 0; i < numWorkers; i++ {
-		start := i * (terms / numWorkers)
-		end := start + (terms / numWorkers)
-		if i == numWorkers-1 {
+	for i := 0; i < runtime.NumCPU(); i++ {
+		start := i * terms / runtime.NumCPU()
+		end := start + terms/runtime.NumCPU()
+		if i == runtime.NumCPU()-1 {
 			end = terms
 		}
 		wg.Add(1)
-		go worker(start, end, ch, &wg)
+		go func(s, e int) {
+			defer wg.Done()
+			r := new(big.Rat)
+			pow := new(big.Int).SetUint64(1)
+			for j := s; j < e; j++ {
+				// 4/(8j+1)
+				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+
+				// –2/(8j+4)
+				t := new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+4)))
+				r.Sub(r, t)
+				r.Sub(r, t)
+
+				// –1/(8j+5)
+				r.Sub(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+5))))
+
+				// –1/(8j+6)
+				r.Sub(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+6))))
+
+				pow.Div(pow, sixteen)
+				if pow.Sign() == 0 {
+					break
+				}
+			}
+			ch <- partial{r}
+		}(start, end)
 	}
 
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
+	go func() { wg.Wait(); close(ch) }()
 
-	S := new(big.Rat)
-	for part := range ch {
-		S.Add(S, part)
+	total := new(big.Rat)
+	for p := range ch {
+		total.Add(total, p.s)
 	}
 
-	// π ≈ 4*S1 - 2*S4 - S5 - S6
-	pi := new(big.Rat).Mul(big.NewRat(4, 1), S)
-	pi.Sub(pi, new(big.Rat).Mul(big.NewRat(2, 1), S))
-	pi.Sub(pi, S)
-	pi.Sub(pi, S)
+	// fractional part only
+	total.Sub(total, new(big.Rat).SetInt(new(big.Int).Quo(total.Num(), total.Denom())))
 
-	// {pi}
-	intPart := new(big.Int).Quo(pi.Num(), pi.Denom())
-	pi.Sub(pi, new(big.Rat).SetInt(intPart))
-
-	result := make([]int, digits)
-	sixteen := big.NewRat(16, 1)
-	for i := 0; i < digits; i++ {
-		pi.Mul(pi, sixteen)
-		digit := new(big.Int).Quo(pi.Num(), pi.Denom())
-		result[i] = int(digit.Int64() & 15)
-		pi.Sub(pi, new(big.Rat).SetInt(digit))
+	digits := make([]byte, n)
+	for i := range digits {
+		total.Mul(total, big.NewRat(16, 1))
+		d := new(big.Int).Quo(total.Num(), total.Denom())
+		digits[i] = byte(d.Int64() & 15)
+		total.Sub(total, new(big.Rat).SetInt(d))
 	}
-	return result
-}
-
-func worker(start, end int, ch chan<- *big.Rat, wg *sync.WaitGroup) {
-	defer wg.Done()
-	sum := new(big.Rat)
-	pow := new(big.Int).SetUint64(1)
-
-	for j := start; j < end; j++ {
-		d1 := int64(8*j + 1)
-		d4 := int64(8*j + 4)
-		d5 := int64(8*j + 5)
-		d6 := int64(8*j + 6)
-
-		// 4/(8j+1)
-		t := new(big.Rat).SetFrac(pow, big.NewInt(d1))
-		sum.Add(sum, t)
-		sum.Add(sum, t)
-		sum.Add(sum, t)
-		sum.Add(sum, t) // 4×
-
-		// -2/(8j+4)
-		t.SetFrac(pow, big.NewInt(d4))
-		sum.Sub(sum, t)
-		sum.Sub(sum, t) // 2×
-
-		// -1/(8j+5)
-		t.SetFrac(pow, big.NewInt(d5))
-		sum.Sub(sum, t)
-
-		// -1/(8j+6)
-		t.SetFrac(pow, big.NewInt(d6))
-		sum.Sub(sum, t)
-
-		pow.Div(pow, big.NewInt(16))
-		if pow.Sign() == 0 {
-			break
-		}
-	}
-	ch <- sum
+	return digits
 }
