@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/claytoncone/GrokBBP/internal/pi"
+	"GrokBBP/internal/pi"
 )
 
 const digits = 1000 // change whenever you want
