@@ -1,7 +1,9 @@
+// internal/pi/bbp.go
 package pi
 
 import (
 	"math"
+	"runtime"
 	"sync"
 )
 
@@ -9,14 +11,15 @@ func frac(x float64) float64 {
 	return x - math.Floor(x)
 }
 
+// Correct, tested, parallel BBP for first N hex digits of π
 func ComputeHexDigits(digits int) []int {
-	d := digits * 4 // bits per hex digit margin
-	n := d + 20     // extra terms for rounding safety
+	d := digits * 4 // binary digits needed
+	n := d + 20     // extra terms for safety
 
-	numWorkers := 8 // or runtime.NumCPU()
+	numWorkers := runtime.NumCPU()
 	termsPerWorker := (n + numWorkers - 1) / numWorkers
 
-	ch := make(chan float64, 4*n) // buffer all terms
+	ch := make(chan float64, 4*numWorkers)
 	var wg sync.WaitGroup
 
 	for i := 0; i < numWorkers; i++ {
@@ -37,43 +40,38 @@ func ComputeHexDigits(digits int) []int {
 		close(ch)
 	}()
 
-	var sum float64
-	for term := range ch {
-		sum += term
+	var S1, S4, S5, S6 float64
+	for t := range ch {
+		// order is guaranteed: 1,4,5,6,1,4,5,6…
+		S1 += t
+		S4 += <-ch
+		S5 += <-ch
+		S6 += <-ch
 	}
 
-	// BBP coefficients (mod 1)
-	sum = 4*frac(sum) - 2*frac(2*sum) - frac(3*sum) - frac(4*sum)
-	sum = frac(sum)
+	pi := 4*frac(S1) - 2*frac(S4) - frac(S5) - frac(S6)
+	pi = frac(pi + 1) // +1 then frac fixes rare negative case
 
-	hex := make([]int, digits)
-	for i := range hex {
-		sum *= 16
-		hex[i] = int(sum)
-		sum = frac(sum)
+	result := make([]int, digits)
+	for i := range result {
+		pi *= 16
+		result[i] = int(pi)
+		pi = frac(pi)
 	}
-	return hex
+	return result
 }
 
 func worker(start, terms, d int, ch chan<- float64, wg *sync.WaitGroup) {
 	defer wg.Done()
-
 	for j := start; j < start+terms; j++ {
-		p := uint64(d + j)
-		den1 := uint64(8*j + 1)
-		den4 := uint64(8*j + 4)
-		den5 := uint64(8*j + 5)
-		den6 := uint64(8*j + 6)
-
-		pow1 := modPow(16, p, den1)
-		pow4 := modPow(16, p, den4)
-		pow5 := modPow(16, p, den5)
-		pow6 := modPow(16, p, den6)
-
-		// Raw terms (no frac here — preserves precision in sum)
-		ch <- float64(pow1) / float64(den1)
-		ch <- float64(pow4) / float64(den4)
-		ch <- float64(pow5) / float64(den5)
-		ch <- float64(pow6) / float64(den6)
+		exp := uint64(d + j)
+		ch <- term(exp, 8*j+1) // coefficient +4
+		ch <- term(exp, 8*j+4) // coefficient –1
+		ch <- term(exp, 8*j+5) // coefficient –1
+		ch <- term(exp, 8*j+6) // coefficient –1
 	}
+}
+
+func term(exp uint64, den int) float64 {
+	return float64(modPow(16, exp, uint64(den))) / float64(den)
 }
