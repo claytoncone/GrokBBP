@@ -42,15 +42,15 @@ func ComputeHexDigits(digits int) []int {
 
 	var S1, S4, S5, S6 float64
 	for t := range ch {
-		// order is guaranteed: 1,4,5,6,1,4,5,6…
 		S1 += t
 		S4 += <-ch
 		S5 += <-ch
 		S6 += <-ch
 	}
 
-	pi := 4*frac(S1) - 2*frac(S4) - frac(S5) - frac(S6)
-	pi = frac(pi + 1) // +1 then frac fixes rare negative case
+	// Correct BBP combination: coefficients first, then one frac
+	pi := 4*S1 - 2*S4 - S5 - S6
+	pi = frac(pi)
 
 	result := make([]int, digits)
 	for i := range result {
