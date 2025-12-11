@@ -6,14 +6,19 @@ import (
 	"sync"
 )
 
-func ComputeHexDigits(digits int) []int {
-	d := digits * 4 // safety margin
-	n := d + 10
+// frac returns the fractional part of x
+func frac(x float64) float64 {
+	return x - math.Floor(x)
+}
 
-	numWorkers := 8 // fixed 8 workers is actually faster than NumCPU() for this workload
+// ComputeHexDigits – the only public function
+func ComputeHexDigits(digits int) []int {
+	d := digits*4 + 10 // safety margin
+	n := d + 20        // a few extra terms never hurt
+	numWorkers := 12   // 8–16 is sweet spot for BBP in 2025
 	termsPerWorker := (n + numWorkers - 1) / numWorkers
 
-	ch := make(chan float64, numWorkers*64) // bigger buffer = less contention
+	ch := make(chan float64, numWorkers*128)
 	var wg sync.WaitGroup
 
 	for i := 0; i < numWorkers; i++ {
@@ -36,11 +41,10 @@ func ComputeHexDigits(digits int) []int {
 
 	sum := kahanSum(ch)
 
-	// BBP formula final combination
+	// BBP final combination
 	sum = 4*frac(sum) - 2*frac(2*sum) - frac(3*sum) - frac(4*sum)
 	sum = frac(sum)
 
-	// extract hex digits
 	hex := make([]int, digits)
 	for i := range hex {
 		sum *= 16
@@ -51,17 +55,14 @@ func ComputeHexDigits(digits int) []int {
 	return hex
 }
 
-// worker now sends four values per j (correct!)
 func worker(start, terms, d int, ch chan<- float64, wg *sync.WaitGroup) {
 	defer wg.Done()
-
 	const scale = 24
 
 	var S1, S4, S5, S6 uint64
 
 	for j := start; j < start+terms; j++ {
 		p := uint64(d + j)
-
 		d1 := uint64(8*j + 1)
 		d4 := uint64(8*j + 4)
 		d5 := uint64(8*j + 5)
@@ -72,13 +73,12 @@ func worker(start, terms, d int, ch chan<- float64, wg *sync.WaitGroup) {
 		S5 = (S5 + modPow(16, p, d5)<<scale) % d5
 		S6 = (S6 + modPow(16, p, d6)<<scale) % d6
 
-		// send the four contributions of this exact term
+		// send each term with its own denominator
 		ch <- float64(S1) / float64(d1<<scale)
 		ch <- float64(S4) / float64(d4<<scale)
 		ch <- float64(S5) / float64(d5<<scale)
 		ch <- float64(S6) / float64(d6<<scale)
 
-		// reset accumulators for next term
-		S1, S4, S5, S6 = 0, 0, 0, 0
+		S1, S4, S5, S6 = 0, 0, 0, 0 // reset for next term
 	}
 }
