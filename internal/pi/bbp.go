@@ -1,79 +1,75 @@
 package pi
 
 import (
-	"math"
+	"math/big"
+	"runtime"
 	"sync"
 )
 
-func frac(x float64) float64 {
-	return x - math.Floor(x)
-}
+var sixteen = big.NewInt(16)
 
-func ComputeHexDigits(digits int) []int {
-	d := digits * 4 // bits per hex digit margin
-	n := d + 20     // extra terms for rounding safety
+// ComputeHexDigits returns the first n hexadecimal digits of π after 3.
+func ComputeHexDigits(n int) []byte {
+	terms := n + 20 // more than enough
 
-	numWorkers := 8 // or runtime.NumCPU()
-	termsPerWorker := (n + numWorkers - 1) / numWorkers
-
-	ch := make(chan float64, 4*n) // buffer all terms
+	type partial struct{ s *big.Rat }
+	ch := make(chan partial, runtime.NumCPU())
 	var wg sync.WaitGroup
 
-	for i := 0; i < numWorkers; i++ {
-		start := i * termsPerWorker
-		terms := termsPerWorker
-		if start+terms > n {
-			terms = n - start
-		}
-		if terms <= 0 {
-			continue
+	for i := 0; i < runtime.NumCPU(); i++ {
+		start := i * terms / runtime.NumCPU()
+		end := start + terms/runtime.NumCPU()
+		if i == runtime.NumCPU()-1 {
+			end = terms
 		}
 		wg.Add(1)
-		go worker(start, terms, d, ch, &wg)
+		go func(s, e int) {
+			defer wg.Done()
+			r := new(big.Rat)
+			pow := new(big.Int).SetUint64(1)
+			for j := s; j < e; j++ {
+				// 4/(8j+1)
+				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+
+				// –2/(8j+4)
+				t := new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+4)))
+				r.Sub(r, t)
+				r.Sub(r, t)
+
+				// –1/(8j+5)
+				r.Sub(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+5))))
+
+				// –1/(8j+6)
+				r.Sub(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+6))))
+
+				pow.Div(pow, sixteen)
+				if pow.Sign() == 0 {
+					break
+				}
+			}
+			ch <- partial{r}
+		}(start, end)
 	}
 
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
+	go func() { wg.Wait(); close(ch) }()
 
-	var sum float64
-	for term := range ch {
-		sum += term
+	total := new(big.Rat)
+	for p := range ch {
+		total.Add(total, p.s)
 	}
 
-	// BBP coefficients (mod 1)
-	sum = 4*frac(sum) - 2*frac(2*sum) - frac(3*sum) - frac(4*sum)
-	sum = frac(sum)
+	// fractional part only
+	total.Sub(total, new(big.Rat).SetInt(new(big.Int).Quo(total.Num(), total.Denom())))
 
-	hex := make([]int, digits)
-	for i := range hex {
-		sum *= 16
-		hex[i] = int(sum)
-		sum = frac(sum)
+	digits := make([]byte, n)
+	for i := range digits {
+		total.Mul(total, big.NewRat(16, 1))
+		d := new(big.Int).Quo(total.Num(), total.Denom())
+		digits[i] = byte(d.Int64() & 15)
+		total.Sub(total, new(big.Rat).SetInt(d))
 	}
-	return hex
-}
-
-func worker(start, terms, d int, ch chan<- float64, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for j := start; j < start+terms; j++ {
-		p := uint64(d + j)
-		den1 := uint64(8*j + 1)
-		den4 := uint64(8*j + 4)
-		den5 := uint64(8*j + 5)
-		den6 := uint64(8*j + 6)
-
-		pow1 := modPow(16, p, den1)
-		pow4 := modPow(16, p, den4)
-		pow5 := modPow(16, p, den5)
-		pow6 := modPow(16, p, den6)
-
-		// Raw terms (no frac here — preserves precision in sum)
-		ch <- float64(pow1) / float64(den1)
-		ch <- float64(pow4) / float64(den4)
-		ch <- float64(pow5) / float64(den5)
-		ch <- float64(pow6) / float64(den6)
-	}
+	return digits
 }
