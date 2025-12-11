@@ -70,10 +70,10 @@ func worker(start, terms, d int, ch chan<- float64, wg *sync.WaitGroup) {
 		pow5 := modPow(16, p, den5)
 		pow6 := modPow(16, p, den6)
 
-		// Exact fractional terms: {16^{d+j} / den}
-		ch <- frac(float64(pow1) / float64(den1))
-		ch <- frac(float64(pow4) / float64(den4))
-		ch <- frac(float64(pow5) / float64(den5))
-		ch <- frac(float64(pow6) / float64(den6))
+		// Raw terms (no frac here — preserves precision in sum)
+		ch <- float64(pow1) / float64(den1)
+		ch <- float64(pow4) / float64(den4)
+		ch <- float64(pow5) / float64(den5)
+		ch <- float64(pow6) / float64(den6)
 	}
 }
