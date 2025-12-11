@@ -6,34 +6,18 @@ import (
 	"sync"
 )
 
-type partial struct {
-	S1, S4, S5, S6 *big.Rat
-}
-
-// frac for big.Rat
-func frac(r *big.Rat) *big.Rat {
-	f := new(big.Rat).Set(r)
-	i := new(big.Rat).SetFrac(f.Num().Div(f.Num(), f.Denom()), big.NewRat(1, 1))
-	f.Sub(r, i)
-	if f.Sign() < 0 {
-		f.Add(f, big.NewRat(1, 1))
-	}
-	return f
-}
-
-// ComputeHexDigits uses big.Rat for exact first N hex digits
 func ComputeHexDigits(digits int) []int {
-	n := digits*4/3 + 100 // conservative number of terms for convergence
+	terms := digits*5 + 100 // safe number of terms
 
 	numWorkers := runtime.NumCPU()
-	ch := make(chan partial, numWorkers)
+	ch := make(chan *big.Rat, numWorkers)
 	var wg sync.WaitGroup
 
 	for i := 0; i < numWorkers; i++ {
-		start := i * (n / numWorkers)
-		end := start + (n / numWorkers)
+		start := i * (terms / numWorkers)
+		end := start + (terms / numWorkers)
 		if i == numWorkers-1 {
-			end = n
+			end = terms
 		}
 		wg.Add(1)
 		go worker(start, end, ch, &wg)
@@ -44,69 +28,67 @@ func ComputeHexDigits(digits int) []int {
 		close(ch)
 	}()
 
-	var totalS1, totalS4, totalS5, totalS6 big.Rat
-	for p := range ch {
-		totalS1.Add(&totalS1, p.S1)
-		totalS4.Add(&totalS4, p.S4)
-		totalS5.Add(&totalS5, p.S5)
-		totalS6.Add(&totalS6, p.S6)
+	S := new(big.Rat)
+	for part := range ch {
+		S.Add(S, part)
 	}
 
-	// BBP combination
-	S1 := frac(&totalS1)
-	S4 := frac(&totalS4)
-	S5 := frac(&totalS5)
-	S6 := frac(&totalS6)
-	pi := new(big.Rat).Mul(big.NewRat(4, 1), S1)
-	S2 := new(big.Rat).Mul(big.NewRat(2, 1), S4)
-	pi.Sub(pi, S2)
-	pi.Sub(pi, S5)
-	pi.Sub(pi, S6)
+	// π ≈ 4*S1 - 2*S4 - S5 - S6
+	pi := new(big.Rat).Mul(big.NewRat(4, 1), S)
+	pi.Sub(pi, new(big.Rat).Mul(big.NewRat(2, 1), S))
+	pi.Sub(pi, S)
+	pi.Sub(pi, S)
 
-	// Extract hex digits
-	hex := make([]int, digits)
-	one := big.NewRat(1, 1)
+	// {pi}
+	intPart := new(big.Int).Quo(pi.Num(), pi.Denom())
+	pi.Sub(pi, new(big.Rat).SetInt(intPart))
+
+	result := make([]int, digits)
 	sixteen := big.NewRat(16, 1)
-	for i := range hex {
+	for i := 0; i < digits; i++ {
 		pi.Mul(pi, sixteen)
-		digit := new(big.Int)
-		pi.Num().Div(pi.Num(), pi.Denom()).Scan(digit)
-		hex[i] = int(digit.Int64())
-		pi = frac(pi)
+		digit := new(big.Int).Quo(pi.Num(), pi.Denom())
+		result[i] = int(digit.Int64() & 15)
+		pi.Sub(pi, new(big.Rat).SetInt(digit))
 	}
-	return hex
+	return result
 }
 
-func worker(start, end int, ch chan<- partial, wg *sync.WaitGroup) {
+func worker(start, end int, ch chan<- *big.Rat, wg *sync.WaitGroup) {
 	defer wg.Done()
+	sum := new(big.Rat)
+	pow := new(big.Int).SetUint64(1)
 
-	var S1, S4, S5, S6 big.Rat
-
-	pow16 := new(big.Int).SetUint64(1)
 	for j := start; j < end; j++ {
-		den1 := big.NewInt(int64(8*j + 1))
-		den4 := big.NewInt(int64(8*j + 4))
-		den5 := big.NewInt(int64(8*j + 5))
-		den6 := big.NewInt(int64(8*j + 6))
+		d1 := int64(8*j + 1)
+		d4 := int64(8*j + 4)
+		d5 := int64(8*j + 5)
+		d6 := int64(8*j + 6)
 
-		term1 := new(big.Rat).SetFrac(pow16, den1)
-		S1.Add(&S1, term1)
+		// 4/(8j+1)
+		t := new(big.Rat).SetFrac(pow, big.NewInt(d1))
+		sum.Add(sum, t)
+		sum.Add(sum, t)
+		sum.Add(sum, t)
+		sum.Add(sum, t) // 4×
 
-		term4 := new(big.Rat).SetFrac(pow16, den4)
-		S4.Add(&S4, term4)
+		// -2/(8j+4)
+		t.SetFrac(pow, big.NewInt(d4))
+		sum.Sub(sum, t)
+		sum.Sub(sum, t) // 2×
 
-		term5 := new(big.Rat).SetFrac(pow16, den5)
-		S5.Add(&S5, term5)
+		// -1/(8j+5)
+		t.SetFrac(pow, big.NewInt(d5))
+		sum.Sub(sum, t)
 
-		term6 := new(big.Rat).SetFrac(pow16, den6)
-		S6.Add(&S6, term6)
+		// -1/(8j+6)
+		t.SetFrac(pow, big.NewInt(d6))
+		sum.Sub(sum, t)
 
-		// Update pow16 = pow16 / 16 for next j
-		pow16.Rsh(pow16, 4) // 16 = 2^4
-		if pow16.Sign() == 0 {
-			break // no more contribution
+		pow.Div(pow, big.NewInt(16))
+		if pow.Sign() == 0 {
+			break
 		}
 	}
-
-	ch <- partial{S1: &S1, S4: &S4, S5: &S5, S6: &S6}
+	ch <- sum
 }
