@@ -6,7 +6,7 @@ import (
 	"GrokBBP/internal/pi"
 )
 
-const digits = 100 // change whenever you want
+const digits = 50 // change whenever you want
 
 func main() {
 	hex := pi.ComputeHexDigits(digits)
