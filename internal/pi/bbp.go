@@ -8,11 +8,12 @@ import (
 
 var sixteen = big.NewInt(16)
 
-// ComputeHexDigits returns the first n hexadecimal digits of π after 3.
+// ComputeHexDigits returns the CORRECT first n hex digits of π (position 0).
 func ComputeHexDigits(n int) []byte {
-	terms := n + 20 // more than enough
+	// We need ~ n*log2(16) ≈ 4n bits → roughly n terms is more than enough
+	terms := n*5 + 100 // generous safety margin
 
-	type partial struct{ s *big.Rat }
+	type partial struct{ S1, S4, S5, S6 *big.Rat }
 	ch := make(chan partial, runtime.NumCPU())
 	var wg sync.WaitGroup
 
@@ -25,51 +26,61 @@ func ComputeHexDigits(n int) []byte {
 		wg.Add(1)
 		go func(s, e int) {
 			defer wg.Done()
-			r := new(big.Rat)
-			pow := new(big.Int).SetUint64(1)
+			S1 := new(big.Rat)
+			S4 := new(big.Rat)
+			S5 := new(big.Rat)
+			S6 := new(big.Rat)
+
+			pow := new(big.Int).SetUint64(1) // 16^j with j starting at 0
+
 			for j := s; j < e; j++ {
-				// 4/(8j+1)
-				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
-				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
-				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
-				r.Add(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
-
-				// –2/(8j+4)
-				t := new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+4)))
-				r.Sub(r, t)
-				r.Sub(r, t)
-
-				// –1/(8j+5)
-				r.Sub(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+5))))
-
-				// –1/(8j+6)
-				r.Sub(r, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+6))))
+				S1.Add(S1, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+1))))
+				S4.Add(S4, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+4))))
+				S5.Add(S5, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+5))))
+				S6.Add(S6, new(big.Rat).SetFrac(pow, big.NewInt(int64(8*j+6))))
 
 				pow.Div(pow, sixteen)
 				if pow.Sign() == 0 {
 					break
 				}
 			}
-			ch <- partial{r}
+			ch <- partial{S1, S4, S5, S6}
 		}(start, end)
 	}
 
 	go func() { wg.Wait(); close(ch) }()
 
-	total := new(big.Rat)
+	// Sum all four series
+	totalS1 := new(big.Rat)
+	totalS4 := new(big.Rat)
+	totalS5 := new(big.Rat)
+	totalS6 := new(big.Rat)
+
 	for p := range ch {
-		total.Add(total, p.s)
+		totalS1.Add(totalS1, p.S1)
+		totalS4.Add(totalS4, p.S4)
+		totalS5.Add(totalS5, p.S5)
+		totalS6.Add(totalS6, p.S6)
 	}
 
-	// fractional part only
-	total.Sub(total, new(big.Rat).SetInt(new(big.Int).Quo(total.Num(), total.Denom())))
+	// BBP formula applied correctly once
+	pi := new(big.Rat).Mul(big.NewRat(4, 1), totalS1)
+	pi.Sub(pi, new(big.Rat).Mul(big.NewRat(2, 1), totalS4))
+	pi.Sub(pi, totalS5)
+	pi.Sub(pi, totalS6)
 
-	digits := make([]byte, n)
-	for i := range digits {
-		total.Mul(total, big.NewRat(16, 1))
-		d := new(big.Int).Quo(total.Num(), total.Denom())
-		digits[i] = byte(d.Int64() & 15)
-		total.Sub(total, new(big.Rat).SetInt(d))
+	// Fractional part
+	intPart := new(big.Int).Quo(pi.Num(), pi.Denom())
+	pi.Sub(pi, new(big.Rat).SetInt(intPart))
+
+	// Extract hex digits
+	result := make([]byte, n)
+	sixteenRat := big.NewRat(16, 1)
+	for i := range result {
+		pi.Mul(pi, sixteenRat)
+		digit := new(big.Int).Quo(pi.Num(), pi.Denom())
+		result[i] = byte(digit.Int64() & 15)
+		pi.Sub(pi, new(big.Rat).SetInt(digit))
 	}
-	return digits
+	return result
 }
