@@ -1,3 +1,3 @@
-module github.com/claytoncone/GrokBBP
+module GrokBBP
 
 go 1.25
